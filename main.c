@@ -39,7 +39,7 @@ unsigned char* read_file(const char* file_name, size_t* size)
     }
 
     fclose(file);
-    printf_s("read data from \"%s\" %lld bytes at 0x%p\n", file_name, *size, data);
+    printf_s("read data from \"%s\" %zu bytes at %p\n", file_name, *size, (void*)data);
     return data;
 }
 
@@ -59,7 +59,7 @@ void write_file(const char* file_name, const unsigned char* data, const size_t s
         printf_s("Error writing to file: %s\n", g_erronoMsg);
         exit(EXIT_FAILURE);
     }
-    printf_s("write data from 0x%p to \"%s\" %lld bytes\n", data, file_name, size);
+    printf_s("write data from %p to \"%s\" %zu bytes\n", (void*)data, file_name, size);
     fclose(file);
 }
 
@@ -117,10 +117,12 @@ static void wait_program_quit(void)
 static void show_invalid_arg(const char* program_name)
 {
     printf_s("Invalid arguments\n"
-             "Usage: %s <file>\n"
-             "Example: %s SaveData0001.sav\n\n"
+             "Usage (auto-detect): %s <file>\n"
+             "Usage (explicit):    %s [encrypt|decrypt] <file>\n"
+             "Example: %s SaveData0001.sav\n"
+             "Example: %s decrypt SaveData0001.sav\n\n"
              "Program will exit in %d seconds",
-             program_name, program_name, WAIT_TIME);
+             program_name, program_name, program_name, program_name, WAIT_TIME);
     wait_program_quit();
     putchar('\n');
     exit(EXIT_FAILURE);
@@ -183,15 +185,70 @@ int main(int argc, char** argv)
         show_invalid_arg(argv[0]);
     }
 
-    const char* save_path = argv[1];
+    const char* save_path = NULL;
+    int force_decrypt = 0;
+    int force_encrypt = 0;
+    
+    // Handle backward compatibility with explicit encrypt/decrypt commands
+    if (argc == 3 && 
+        (strcmp(argv[1], "decrypt") == 0 || strcmp(argv[1], "-d") == 0))
+    {
+        force_decrypt = 1;
+        save_path = argv[2];
+    }
+    else if (argc == 3 && 
+             (strcmp(argv[1], "encrypt") == 0 || strcmp(argv[1], "-e") == 0))
+    {
+        force_encrypt = 1;
+        save_path = argv[2];
+    }
+    else if (argc == 2)
+    {
+        // Check if this looks like a command rather than a filename
+        if (strcmp(argv[1], "decrypt") == 0 || strcmp(argv[1], "-d") == 0 ||
+            strcmp(argv[1], "encrypt") == 0 || strcmp(argv[1], "-e") == 0)
+        {
+            printf_s("Missing filename after %s command\n", argv[1]);
+            show_invalid_arg(argv[0]);
+        }
+        // Auto-detect mode (new interface)
+        save_path = argv[1];
+    }
+    else
+    {
+        show_invalid_arg(argv[0]);
+    }
+
     if (save_path && *save_path != '\0')
     {
         size_t filesize = 0;
         unsigned char* save_data = read_file(save_path, &filesize);
         uint32_t file_magic = 0;
-        if (check_magic(save_data, filesize, ENCRYPT_GVAS_MAGIC, &file_magic))
+        
+        // Check if we can read the magic number
+        if (filesize < sizeof(uint32_t))
         {
-            tell_save_magic(file_magic);
+            printf_s("File too small to be a valid save file (need at least %zu bytes, got %zu)\n", 
+                     sizeof(uint32_t), filesize);
+            if (save_data)
+            {
+                free(save_data);
+            }
+            exit(EXIT_FAILURE);
+        }
+        
+        if (force_decrypt || 
+            (!force_encrypt && check_magic(save_data, filesize, ENCRYPT_GVAS_MAGIC, &file_magic)))
+        {
+            if (!force_decrypt)
+            {
+                tell_save_magic(file_magic);
+            }
+            else
+            {
+                printf_s("Forced decryption mode\n");
+            }
+            
             unsigned char* decrypted_data = (unsigned char*)malloc(filesize);
             if (!decrypted_data)
             {
@@ -214,10 +271,23 @@ int main(int argc, char** argv)
             }
 
             write_file("decrypt_out.sav", decrypted_data, filesize);
+            if (decrypted_data)
+            {
+                free(decrypted_data);
+            }
         }
-        else if (check_magic(save_data, filesize, DECRYPT_GVAS_MAGIC, &file_magic))
+        else if (force_encrypt || 
+                 check_magic(save_data, filesize, DECRYPT_GVAS_MAGIC, &file_magic))
         {
-            tell_save_magic(file_magic);
+            if (!force_encrypt)
+            {
+                tell_save_magic(file_magic);
+            }
+            else
+            {
+                printf_s("Forced encryption mode\n");
+            }
+            
             unsigned char* encrypted_data = (unsigned char*)malloc(filesize);
             if (!encrypted_data)
             {
@@ -240,22 +310,35 @@ int main(int argc, char** argv)
             }
 
             write_file("encrypt_out.sav", encrypted_data, filesize);
+            if (encrypted_data)
+            {
+                free(encrypted_data);
+            }
         }
         else
         {
             tell_save_magic(file_magic);
-            printf_s("Invalid save file.\n");
+            printf_s("Invalid save file or unrecognized format.\n");
+            printf_s("Expected encrypted magic: 0x%08x or decrypted magic: 0x%08x\n", 
+                     ENCRYPT_GVAS_MAGIC, DECRYPT_GVAS_MAGIC);
+            printf_s("If you believe this is a valid save file, try using explicit mode:\n");
+            printf_s("  %s decrypt %s  (to decrypt)\n", argv[0], save_path);
+            printf_s("  %s encrypt %s  (to encrypt)\n", argv[0], save_path);
+            if (save_data)
+            {
+                free(save_data);
+            }
             exit(EXIT_FAILURE);
         }
 
         if (save_data)
         {
-            printf_s("free save_data: 0x%p\n", save_data);
+            printf_s("free save_data: %p\n", (void*)save_data);
             free(save_data);
         }
         else
         {
-            printf_s("failed to free save_data: 0x%p\n", save_data);
+            printf_s("failed to free save_data: %p\n", (void*)save_data);
         }
     }
     else
