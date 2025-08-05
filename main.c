@@ -204,6 +204,13 @@ int main(int argc, char** argv)
     }
     else if (argc == 2)
     {
+        // Check if this looks like a command rather than a filename
+        if (strcmp(argv[1], "decrypt") == 0 || strcmp(argv[1], "-d") == 0 ||
+            strcmp(argv[1], "encrypt") == 0 || strcmp(argv[1], "-e") == 0)
+        {
+            printf_s("Missing filename after %s command\n", argv[1]);
+            show_invalid_arg(argv[0]);
+        }
         // Auto-detect mode (new interface)
         save_path = argv[1];
     }
